@@ -1,5 +1,5 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import numpy as np
 import librosa
 import torch
@@ -10,17 +10,17 @@ import pandas as pd
 import json
 import os
 from sklearn.model_selection import train_test_split
-import uvicorn
 
-app = FastAPI()
+app = Flask(__name__)
+CORS(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173/"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
 
 class EmotionDatasetConfig:
@@ -110,28 +110,28 @@ class AudioDataset(Dataset):
             except:
                 continue
 
-    def _process_audio(self, audio_path):
-        try:
-            signal, sr = librosa.load(audio_path, sr=self.sr)
+        def process_audio(self, audio_path):  # Changed from _process_audio
+            try:
+                signal, sr = librosa.load(audio_path, sr=self.sr)
 
-            target_length = self.sr * self.duration
-            if len(signal) > target_length:
-                signal = signal[:target_length]
-            else:
-                signal = np.pad(signal, (0, max(0, target_length - len(signal))))
+                target_length = self.sr * self.duration
+                if len(signal) > target_length:
+                    signal = signal[:target_length]
+                else:
+                    signal = np.pad(signal, (0, max(0, target_length - len(signal))))
 
-            mfccs = librosa.feature.mfcc(y=signal, sr=sr, n_mfcc=40)
-            mfccs_scaled = np.mean(mfccs.T, axis=0)
-            delta = librosa.feature.delta(mfccs)
-            delta2 = librosa.feature.delta(mfccs, order=2)
+                mfccs = librosa.feature.mfcc(y=signal, sr=sr, n_mfcc=40)
+                mfccs_scaled = np.mean(mfccs.T, axis=0)
+                delta = librosa.feature.delta(mfccs)
+                delta2 = librosa.feature.delta(mfccs, order=2)
 
-            features = np.concatenate([mfccs, delta, delta2])
-            features = torch.FloatTensor(features).unsqueeze(0)
+                features = np.concatenate([mfccs, delta, delta2])
+                features = torch.FloatTensor(features).unsqueeze(0)
 
-            return features
-        except Exception as e:
-            print(f"Error processing {audio_path}: {str(e)}")
-            return None
+                return features
+            except Exception as e:
+                print(f"Error processing {audio_path}: {str(e)}")
+                return None
 
     def __len__(self):
         return len(self.files)
@@ -140,7 +140,7 @@ class AudioDataset(Dataset):
         audio_path = self.files[idx]
         label = self.labels[idx]
 
-        features = self._process_audio(audio_path)
+        features = self.process_audio(audio_path)
         if features is None:
             features = torch.zeros((1, 120, 94))
 
@@ -278,17 +278,18 @@ def train_model(dataset_paths, batch_size=32, epochs=10, learning_rate=0.001):
         )
 
 
-@app.post("/train")
-async def train_endpoint(dataset_paths: dict):
+@app.route("/train", methods=["POST"])
+def train_endpoint():
     try:
+        dataset_paths = request.get_json()
         train_model(dataset_paths)
-        return {"message": "Training completed successfully"}
+        return jsonify({"message": "Training completed successfully"})
     except Exception as e:
-        return {"error": str(e)}
+        return jsonify({"error": str(e)}), 500
 
 
-@app.post("/predict")
-async def predict_emotion(file: UploadFile = File(...)):
+@app.route("/predict", methods=["POST"])
+def predict_emotion():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = EmotionRecognitionModel().to(device)
 
@@ -296,12 +297,13 @@ async def predict_emotion(file: UploadFile = File(...)):
         checkpoint = torch.load("best_model.pth")
         model.load_state_dict(checkpoint["model_state_dict"])
 
-    contents = await file.read()
+    file = request.files["file"]
     with open("temp_audio.wav", "wb") as f:
-        f.write(contents)
+        f.write(file.read())
 
     dataset = AudioDataset("", "CREMA-D")
-    features = dataset._process_audio("temp_audio.wav")
+    print("Attempting to process audio file")
+    features = dataset.process_audio("temp_audio.wav")
     features = features.unsqueeze(0).to(device)
 
     model.eval()
@@ -312,8 +314,8 @@ async def predict_emotion(file: UploadFile = File(...)):
         confidence = prediction[0][emotion_idx].item()
 
     emotions = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
-    return {"emotion": emotions[emotion_idx], "confidence": confidence}
+    return jsonify({"emotion": emotions[emotion_idx], "confidence": confidence})
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="localhost", port=8000)
+    app.run(host="localhost", port=8000, debug=True)
