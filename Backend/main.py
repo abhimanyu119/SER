@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import numpy as np
 import librosa
 import torch
@@ -12,7 +12,7 @@ import os
 from sklearn.model_selection import train_test_split
 
 app = Flask(__name__)
-CORS(app)
+cors = CORS(app)
 
 
 @app.after_request
@@ -278,7 +278,8 @@ def train_model(dataset_paths, batch_size=32, epochs=10, learning_rate=0.001):
         )
 
 
-@app.route("/train", methods=["POST"])
+@app.route("/train", methods=['POST', 'OPTIONS'])
+@cross_origin()
 def train_endpoint():
     try:
         dataset_paths = request.get_json()
@@ -288,7 +289,8 @@ def train_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/predict", methods=["POST"])
+@app.route("/predict", methods=['POST', 'OPTIONS'])
+@cross_origin()
 def predict_emotion():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = EmotionRecognitionModel().to(device)
