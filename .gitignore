@@ -19,9 +19,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-*.wav
-*.config.js
-*.config.ts
-*.config.tsx
-*.config.json
-*.config.yaml
